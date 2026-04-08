@@ -884,7 +884,10 @@ async function run() {
           }
 
           grouped[phone].totalOrders += 1;
-          grouped[phone].totalSpent += Number(order.price) || 0;
+
+          if (order.status === "delivered") {
+            grouped[phone].totalSpent += Number(order.price) || 0;
+          }
         }
 
         res.send(Object.values(grouped));
@@ -895,6 +898,112 @@ async function run() {
         });
       }
     });
+
+    // ===============================
+    // GET /api/dashboard/summary
+    // Seller dashboard summary (full data, no pagination issue)
+    // ===============================
+   app.get("/api/dashboard/summary", checkUserAccess, async (req, res) => {
+     try {
+       const { email } = req.query;
+
+       if (!email) {
+         return res.status(400).send({ message: "Email is required" });
+       }
+
+       if (email !== req.dbUser.email) {
+         return res.status(403).send({
+           message: "Unauthorized access",
+         });
+       }
+
+       const orders = await orderCollection
+         .find({ sellerEmail: email })
+         .sort({ createdAt: -1 })
+         .toArray();
+
+       const totalOrders = orders.length;
+
+       const pendingOrders = orders.filter(
+         (order) => order.status === "pending",
+       ).length;
+
+       const confirmedOrders = orders.filter(
+         (order) => order.status === "confirmed",
+       ).length;
+
+       const deliveredOrders = orders.filter(
+         (order) => order.status === "delivered",
+       ).length;
+
+       const totalSell = orders
+         .filter((order) => order.status === "delivered")
+         .reduce((sum, order) => sum + (Number(order.price) || 0), 0);
+
+       const uniqueCustomers = new Set(
+         orders.map((order) => order.phone).filter(Boolean),
+       ).size;
+
+       const avgSellValue =
+         deliveredOrders > 0 ? Math.round(totalSell / deliveredOrders) : 0;
+
+       const today = new Date();
+       today.setHours(0, 0, 0, 0);
+
+       const todayOrders = orders.filter((order) => {
+         if (!order?.createdAt) return false;
+
+         const orderDate = new Date(order.createdAt);
+         if (Number.isNaN(orderDate.getTime())) return false;
+
+         orderDate.setHours(0, 0, 0, 0);
+         return orderDate.getTime() === today.getTime();
+       });
+
+       const todayPendingOrders = todayOrders.filter(
+         (order) => order.status === "pending",
+       ).length;
+
+       const todayConfirmedOrders = todayOrders.filter(
+         (order) => order.status === "confirmed",
+       ).length;
+
+       const todayDeliveredOrders = todayOrders.filter(
+         (order) => order.status === "delivered",
+       ).length;
+
+       const todayTotalSell = todayOrders
+         .filter((order) => order.status === "delivered")
+         .reduce((sum, order) => sum + (Number(order.price) || 0), 0);
+
+       const recentPendingOrders = orders
+         .filter((order) => order.status === "pending")
+         .slice(0, 5);
+
+       const recentOrders = orders.slice(0, 15);
+
+       res.send({
+         totalOrders,
+         pendingOrders,
+         confirmedOrders,
+         deliveredOrders,
+         totalSell,
+         uniqueCustomers,
+         avgSellValue,
+         todayPendingOrders,
+         todayConfirmedOrders,
+         todayDeliveredOrders,
+         todayTotalSell,
+         recentPendingOrders,
+         recentOrders,
+       });
+     } catch (error) {
+       res.status(500).send({
+         message: "Failed to fetch dashboard summary",
+         error: error.message,
+       });
+     }
+   });
 
     console.log("✅ Server routes ready");
   } finally {
