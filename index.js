@@ -576,16 +576,16 @@ async function run() {
           });
         }
 
-       //ami update korechi db te spae bachate..
-       order.status = order.status || "pending";
-       order.source = order.source || "manual";
-       order.createdAt = new Date();
-       order.updatedAt = new Date();
+        //ami update korechi db te spae bachate..
+        order.status = order.status || "pending";
+        order.source = order.source || "manual";
+        order.createdAt = new Date();
+        order.updatedAt = new Date();
 
-       // optional empty fields remove করে দিচ্ছি
-       if (!order.address) delete order.address;
-       if (!order.size) delete order.size;
-       if (!order.color) delete order.color;
+        // optional empty fields remove করে দিচ্ছি
+        if (!order.address) delete order.address;
+        if (!order.size) delete order.size;
+        if (!order.color) delete order.color;
 
         const result = await orderCollection.insertOne(order);
         res.send(result);
@@ -599,11 +599,20 @@ async function run() {
 
     // ===============================
     // GET /api/orders
-    // Email wise order list
+    // Email wise order list with pagination + filters
     // ===============================
     app.get("/api/orders", checkUserAccess, async (req, res) => {
       try {
-        const email = req.query.email;
+        const {
+          email,
+          page = "1",
+          limit = "15",
+          search = "",
+          status = "",
+          dateFilter = "",
+          startDate = "",
+          endDate = "",
+        } = req.query;
 
         if (!email) {
           return res.status(400).send({ message: "Email is required" });
@@ -615,97 +624,183 @@ async function run() {
           });
         }
 
+        const currentPage = Math.max(Number(page) || 1, 1);
+        const pageSize = Math.max(Number(limit) || 15, 1);
+        const skip = (currentPage - 1) * pageSize;
+
+        const query = {
+          sellerEmail: email,
+        };
+
+        if (status) {
+          query.status = status;
+        }
+
+        if (search.trim()) {
+          query.$or = [
+            { customerName: { $regex: search.trim(), $options: "i" } },
+            { phone: { $regex: search.trim(), $options: "i" } },
+            { product: { $regex: search.trim(), $options: "i" } },
+          ];
+        }
+
+        if (dateFilter === "today") {
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+
+          const todayEnd = new Date();
+          todayEnd.setHours(23, 59, 59, 999);
+
+          query.createdAt = {
+            $gte: todayStart,
+            $lte: todayEnd,
+          };
+        }
+
+        if (["last2", "last3", "last7"].includes(dateFilter)) {
+          const dayMap = {
+            last2: 2,
+            last3: 3,
+            last7: 7,
+          };
+
+          const start = new Date();
+          start.setHours(0, 0, 0, 0);
+          start.setDate(start.getDate() - (dayMap[dateFilter] - 1));
+
+          const end = new Date();
+          end.setHours(23, 59, 59, 999);
+
+          query.createdAt = {
+            $gte: start,
+            $lte: end,
+          };
+        }
+
+        if (dateFilter === "custom") {
+          const customDateQuery = {};
+
+          if (startDate) {
+            const customStart = new Date(startDate);
+            customStart.setHours(0, 0, 0, 0);
+            customDateQuery.$gte = customStart;
+          }
+
+          if (endDate) {
+            const customEnd = new Date(endDate);
+            customEnd.setHours(23, 59, 59, 999);
+            customDateQuery.$lte = customEnd;
+          }
+
+          if (Object.keys(customDateQuery).length > 0) {
+            query.createdAt = customDateQuery;
+          }
+        }
+
+        const total = await orderCollection.countDocuments(query);
+
         const orders = await orderCollection
-          .find({ sellerEmail: email })
+          .find(query)
           .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(pageSize)
           .toArray();
 
-        res.send(orders);
+        res.send({
+          orders,
+          total,
+          page: currentPage,
+          limit: pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        });
       } catch (error) {
-        res.status(500).send({ message: "Failed to fetch orders" });
+        res.status(500).send({
+          message: "Failed to fetch orders",
+          error: error.message,
+        });
       }
     });
-
     // ===============================
     // PATCH /api/orders/:id
     // Update order status
     // ===============================
-   app.patch("/api/orders/:id", checkUserAccess, async (req, res) => {
-     try {
-       const id = req.params.id;
-       const {
-         email,
-         status,
-         customerName,
-         phone,
-         address,
-         product,
-         quantity,
-         size,
-         color,
-         price,
-       } = req.body;
+    app.patch("/api/orders/:id", checkUserAccess, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const {
+          email,
+          status,
+          customerName,
+          phone,
+          address,
+          product,
+          quantity,
+          size,
+          color,
+          price,
+        } = req.body;
 
-       if (!email) {
-         return res.status(400).send({ message: "Email is required" });
-       }
+        if (!email) {
+          return res.status(400).send({ message: "Email is required" });
+        }
 
-       if (email !== req.dbUser.email) {
-         return res.status(403).send({
-           message: "Unauthorized update",
-         });
-       }
+        if (email !== req.dbUser.email) {
+          return res.status(403).send({
+            message: "Unauthorized update",
+          });
+        }
 
-       const existingOrder = await orderCollection.findOne({
-         _id: new ObjectId(id),
-       });
+        const existingOrder = await orderCollection.findOne({
+          _id: new ObjectId(id),
+        });
 
-       if (!existingOrder) {
-         return res.status(404).send({
-           message: "Order not found",
-         });
-       }
+        if (!existingOrder) {
+          return res.status(404).send({
+            message: "Order not found",
+          });
+        }
 
-       if (existingOrder.sellerEmail !== req.dbUser.email) {
-         return res.status(403).send({
-           message: "Unauthorized update",
-         });
-       }
+        if (existingOrder.sellerEmail !== req.dbUser.email) {
+          return res.status(403).send({
+            message: "Unauthorized update",
+          });
+        }
 
-       const updateFields = {
-         updatedAt: new Date(),
-       };
+        const updateFields = {
+          updatedAt: new Date(),
+        };
 
-       if (status !== undefined) updateFields.status = status;
-       if (customerName !== undefined) updateFields.customerName = customerName;
-       if (phone !== undefined) updateFields.phone = phone;
-       if (address !== undefined) updateFields.address = address;
-       if (product !== undefined) updateFields.product = product;
-       if (quantity !== undefined)
-         updateFields.quantity = Number(quantity) || 1;
-       if (size !== undefined) updateFields.size = size;
-       if (color !== undefined) updateFields.color = color;
-       if (price !== undefined) updateFields.price = Number(price) || 0;
+        if (status !== undefined) updateFields.status = status;
+        if (customerName !== undefined)
+          updateFields.customerName = customerName;
+        if (phone !== undefined) updateFields.phone = phone;
+        if (address !== undefined) updateFields.address = address;
+        if (product !== undefined) updateFields.product = product;
+        if (quantity !== undefined)
+          updateFields.quantity = Number(quantity) || 1;
+        if (size !== undefined) updateFields.size = size;
+        if (color !== undefined) updateFields.color = color;
+        if (price !== undefined) updateFields.price = Number(price) || 0;
 
-       if (!updateFields.address) delete updateFields.address;
-       if (!updateFields.size) delete updateFields.size;
-       if (!updateFields.color) delete updateFields.color;
+        if (!updateFields.address) delete updateFields.address;
+        if (!updateFields.size) delete updateFields.size;
+        if (!updateFields.color) delete updateFields.color;
 
-       const result = await orderCollection.updateOne(
-         { _id: new ObjectId(id) },
-         {
-           $set: updateFields,
-         },
-       );
+        const result = await orderCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: updateFields,
+          },
+        );
 
-       res.send(result);
-     } catch (error) {
-       res.status(500).send({
-         message: "Failed to update order",
-         error: error.message,
-       });
-     }
-   });
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          message: "Failed to update order",
+          error: error.message,
+        });
+      }
+    });
 
     // ===============================
     // DELETE /api/orders/:id
