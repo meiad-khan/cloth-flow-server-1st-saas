@@ -575,12 +575,18 @@ async function run() {
             message: "Unauthorized order creation",
           });
         }
+        
+        //ami add korechi confirmed at and delivered at dekhte..
+        const now = new Date();
 
-        //ami update korechi db te spae bachate..
         order.status = order.status || "pending";
         order.source = order.source || "manual";
-        order.createdAt = new Date();
-        order.updatedAt = new Date();
+        order.createdAt = now;
+        order.updatedAt = now;
+
+        // status timestamp fields
+        order.confirmedAt = order.status === "confirmed" ? now : null;
+        order.deliveredAt = order.status === "delivered" ? now : null;
 
         // optional empty fields remove করে দিচ্ছি
         if (!order.address) delete order.address;
@@ -766,11 +772,12 @@ async function run() {
           });
         }
 
+        const now = new Date();
+
         const updateFields = {
-          updatedAt: new Date(),
+          updatedAt: now,
         };
 
-        if (status !== undefined) updateFields.status = status;
         if (customerName !== undefined)
           updateFields.customerName = customerName;
         if (phone !== undefined) updateFields.phone = phone;
@@ -781,6 +788,25 @@ async function run() {
         if (size !== undefined) updateFields.size = size;
         if (color !== undefined) updateFields.color = color;
         if (price !== undefined) updateFields.price = Number(price) || 0;
+
+        if (status !== undefined) {
+          updateFields.status = status;
+
+          if (status === "pending") {
+            updateFields.confirmedAt = null;
+            updateFields.deliveredAt = null;
+          }
+
+          if (status === "confirmed") {
+            updateFields.confirmedAt = existingOrder.confirmedAt || now;
+            updateFields.deliveredAt = null;
+          }
+
+          if (status === "delivered") {
+            updateFields.confirmedAt = existingOrder.confirmedAt || now;
+            updateFields.deliveredAt = now;
+          }
+        }
 
         if (!updateFields.address) delete updateFields.address;
         if (!updateFields.size) delete updateFields.size;
@@ -950,30 +976,30 @@ async function run() {
        const today = new Date();
        today.setHours(0, 0, 0, 0);
 
-       const todayOrders = orders.filter((order) => {
-         if (!order?.createdAt) return false;
+       const isToday = (value) => {
+         if (!value) return false;
 
-         const orderDate = new Date(order.createdAt);
-         if (Number.isNaN(orderDate.getTime())) return false;
+         const date = new Date(value);
+         if (Number.isNaN(date.getTime())) return false;
 
-         orderDate.setHours(0, 0, 0, 0);
-         return orderDate.getTime() === today.getTime();
-       });
+         date.setHours(0, 0, 0, 0);
+         return date.getTime() === today.getTime();
+       };
 
-       const todayPendingOrders = todayOrders.filter(
-         (order) => order.status === "pending",
-       ).length;
+       const todayPendingOrders = orders.filter((order) => {
+         return order.status === "pending" && isToday(order.createdAt);
+       }).length;
 
-       const todayConfirmedOrders = todayOrders.filter(
-         (order) => order.status === "confirmed",
-       ).length;
+       const todayConfirmedOrders = orders.filter((order) => {
+         return isToday(order.confirmedAt);
+       }).length;
 
-       const todayDeliveredOrders = todayOrders.filter(
-         (order) => order.status === "delivered",
-       ).length;
+       const todayDeliveredOrders = orders.filter((order) => {
+         return isToday(order.deliveredAt);
+       }).length;
 
-       const todayTotalSell = todayOrders
-         .filter((order) => order.status === "delivered")
+       const todayTotalSell = orders
+         .filter((order) => isToday(order.deliveredAt))
          .reduce((sum, order) => sum + (Number(order.price) || 0), 0);
 
        const recentPendingOrders = orders
